@@ -1,0 +1,8 @@
+{
+  "display_name": "Image Localizer",
+  "author": "Roman Schiffino",
+  "version": "0.1.0",
+  "js": "index.js",
+  "license": "AGPL-3.0-or-later",
+  "description": "Modifies image URLs to use local paths via slash command."
+}
