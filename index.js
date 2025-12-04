@@ -1,4 +1,11 @@
-import {eventSource, getRequestHeaders} from "../../../../script.js";
+import {
+    characters, createOrEditCharacter, event_types,
+    eventSource,
+    getRequestHeaders,
+    saveCharacterDebounced,
+    saveSettingsDebounced,
+    this_chid
+} from "../../../../script.js";
 
 import {SlashCommand} from '../../../slash-commands/SlashCommand.js';
 import {SlashCommandParser} from '../../../slash-commands/SlashCommandParser.js';
@@ -37,7 +44,7 @@ const EXTENSION_ID = "localizeImages";
 
 // Handy-dandy regex to match markdown and HTML image URLs
 const URL_REGEX =
-    /(?:!?\[(?<altTextBrk>[^\]]*?)] \(|<img(?: alt=["'](?<altTextImg1>[^"']*?))? src=["'])(https?:\/\/[^\s)"'>]+)(?:["'](?: alt=["'](?<altTextImg2>[^"']*?))?(?:(?<attr>[a-zA-Z0-9]+?=["'][a-zA-Z0-9]+?["'])*?)?>|\s?\))/gi;
+    /(?:!?\[(?<altTextBrk>[^\]]*?)]\s*?\(|<img(?: alt=["'](?<altTextImg1>[^"']*?))? src=["'])(https?:\/\/[^\s)"'>]+)(?:["'](?: alt=["'](?<altTextImg2>[^"']*?))?(?:(?<attr>[a-zA-Z0-9]+?=["'][a-zA-Z0-9]+?["'])*?)?>|\s?\))/gi;
 
 // which JSON fields to scan for URLs?
 const SCAN_FIELDS = [
@@ -209,6 +216,14 @@ async function mergeCharacterJson(avatarUrl, updatedPayload) {
 
 /// ---------- DOWNLOAD + UPLOAD UTILITIES ----------
 
+function proxied(url) {
+    return `/proxy/${encodeURIComponent(url)}`;
+}
+
+function proxiedRaw(url) {
+    return `/proxy/${url}`;
+}
+
 /**
  * Download a remote URL and upload it to /user/files/...
  *
@@ -220,7 +235,9 @@ async function mergeCharacterJson(avatarUrl, updatedPayload) {
  */
 async function downloadToLocal(url, charName, fileNumber = 0, ext = "png") {
     // 1. Download remote file
-    const resp = await fetch(url);
+    const resp = await fetch(proxied(url), {
+        method: "GET"
+    });
     if (!resp.ok)
         throw new Error(`Failed to download remote: ${url}`);
 
@@ -352,6 +369,60 @@ async function forceCharacterReload(avatarUrl, json) {
 
     console.log("[localizeImages] Forced character reload via /edit (cache bust triggered)");
 }
+
+async function megaCacheBust(avatarUrl, urlMap) {
+    console.log("[localizeImages] Forcing megaCacheBust via CORS proxy");
+
+    // Bust each original image through corsProxy
+    for (const [remoteUrl, localUrl] of Object.entries(urlMap)) {
+
+        // Remote image bust
+        await fetch(proxied(remoteUrl), {
+            method: "GET",
+            cache: "reload",
+        }).catch(err => {
+            console.warn("[localizeImages] Failed remote bust:", remoteUrl, err);
+        });
+
+        // Local image bust
+        await fetch(localUrl, {
+            method: "GET",
+            cache: "reload",
+        }).catch(err => {
+            console.warn("[localizeImages] Failed local bust:", localUrl, err);
+        });
+    }
+
+    // Avatar JSON cache bust
+    let curRes = await fetch("/api/characters/get", {
+        method: "POST",
+        cache: "no-store",
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ avatar_url: avatarUrl, format: "json" }),
+    });
+    if (!curRes.ok) throw new Error(`Failed to fetch char JSON: ${curRes.status} \n ${await curRes.text().catch(() => "")}`);
+
+    // Avatar JSON cache bust
+    curRes = await fetch("/api/characters/get", {
+        method: "POST",
+        cache: "reload",
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ avatar_url: avatarUrl, format: "json" }),
+    });
+    if (!curRes.ok) throw new Error(`Failed to fetch char JSON: ${curRes.status} \n ${await curRes.text().catch(() => "")}`);
+
+    const avatarUrlPath = ["/characters/", avatarUrl].join("")
+    // avatar image bust
+    curRes = await fetch(avatarUrlPath, {
+        method: "GET",
+        cache: "reload",
+        headers: getRequestHeaders(),
+    });
+    if (!curRes.ok) throw new Error(`Failed to fetch avatar image: ${curRes.status} \n ${await curRes.text().catch(() => "")}`);
+
+    console.log("[localizeImages] Mega cache bust complete.");
+}
+
 
 // ----------------------------------------------------------------------------
 
@@ -485,9 +556,18 @@ async function localizeImages() {
     // 5. Save updated PNG card
     await mergeCharacterJson(avatarUrl, updates);
 
-
     console.log("[localizeImages] Successfully updated character.");
-    await eventSource.emit("character_edited");
+    await megaCacheBust(avatarUrl, urlMap);
+    console.log("[localizeImages] Successfully BUSTED cache.");
+    //saveCharacterDebounced();
+    //saveSettingsDebounced();
+    //context.saveMetadataDebounced();
+    //context.createCharacterData
+    await context.getCharacters();
+    //await eventSource.emit(event_types.CHARACTER_EDITED, { detail: { id: this_chid, character: characters[this_chid] } });
+    //await context.reloadCurrentChat();
+    //await context.
+    await createOrEditCharacter();
 
 
     return 1;
