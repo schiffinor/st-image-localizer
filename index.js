@@ -44,7 +44,7 @@ const EXTENSION_ID = "localizeImages";
 
 // Handy-dandy regex to match markdown and HTML image URLs
 const URL_REGEX =
-    /(?:!?\[(?<altTextBrk>[^\]]*?)]\s*?\(|<img(?: alt=["'](?<altTextImg1>[^"']*?))? src=["'])(https?:\/\/[^\s)"'>]+)(?:["'](?: alt=["'](?<altTextImg2>[^"']*?))?(?:(?<attr>[a-zA-Z0-9]+?=["'][a-zA-Z0-9]+?["'])*?)?>|\s?\))/gi;
+    /(?:!?\[(?<altTextBrk>[^\]]*?)]\s*?\(|<img(?: alt=["'](?<altTextImg1>[^"']*?))? src=["'])(https?:\/\/[^\s)"'>]+)(?:["'](?: alt=["'](?<altTextImg2>[^"']*?))?(?:(?<attr>[a-zA-Z0-9]+?=["'][a-zA-Z0-9]+?["'])*?)?\/?>|\s?\))/gi;
 
 // which JSON fields to scan for URLs?
 const SCAN_FIELDS = [
