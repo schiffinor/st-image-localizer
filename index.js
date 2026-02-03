@@ -43,8 +43,10 @@ import {SlashCommandParser} from '../../../slash-commands/SlashCommandParser.js'
 const EXTENSION_ID = "localizeImages";
 
 // Handy-dandy regex to match markdown and HTML image URLs
+// [](alt text)(url) markdown
+// <img alt="alt text" src="url" foo="bar" /> HTML
 const URL_REGEX =
-    /(?:!?\[(?<altTextBrk>[^\]]*?)]\s*?\(|<img(?: alt=["'](?<altTextImg1>[^"']*?))? src=["'])(https?:\/\/[^\s)"'>]+)(?:["'](?: alt=["'](?<altTextImg2>[^"']*?))?(?:(?<attr>[a-zA-Z0-9]+?=["'][a-zA-Z0-9]+?["'])*?)?\/?>|\s?\))/gi;
+    /(?:!?\[(?<altTextBrk>[^\]]*?)]\s*?\(|<img(?: alt=["'](?<altTextImg1>[^"']*?))? src=["'])(https?:\/\/[^\s)"'>]+)(?:["'](?: alt=(?:["'](?<altTextImg2>[^"']*?)["'])?)?(?:(?<attr> ?[a-zA-Z0-9]+?=["'][^"']+?["'])*?)?\/?>|\s?\))/gi;
 
 // which JSON fields to scan for URLs?
 const SCAN_FIELDS = [
@@ -450,6 +452,7 @@ async function localizeImages() {
 
     const avatarUrl = char.avatar;
     const charName = char.data?.name || "Unknown";
+    const avatarName = (avatarUrl.split("/").pop() || "character.png").split(".")[0];
 
     // 1. fetch raw JSON
     const json = await fetchCharacterJson(avatarUrl);
@@ -496,11 +499,11 @@ async function localizeImages() {
             }
 
             // 1) upload to /user/files/...
-            const tmpPath = await downloadToLocal(remoteUrl, charName, urlCnt, extensionType);
+            const tmpPath = await downloadToLocal(remoteUrl, avatarName, urlCnt, extensionType);
 
             // 2) move to /user/images/<charName>/N.ext via plugin
             // 3) store mapping for replacement
-            urlMap[remoteUrl] = await moveToImages(tmpPath, charName, urlCnt, extensionType);
+            urlMap[remoteUrl] = await moveToImages(tmpPath, avatarName, urlCnt, extensionType);
             urlCnt++;
         } catch (err) {
             console.warn("[localizeImages] Failed to convert:", remoteUrl, err);
