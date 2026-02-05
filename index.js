@@ -292,17 +292,21 @@ async function downloadToLocal(url, charName, fileNumber = 0, ext = "png") {
  *
  * @param {String} localPath source path (e.g. "/user/files/char_0.png")
  * @param {String} charName character name (for destination folder)
+ * @param {String} avatarName avatar name (for destination subfolder)
  * @param {Number} fileNumber file number (for filename)
  * @param {String} ext file extension
  * @returns {Promise<String>} destination path (e.g. "/user/images/char/0.png")
  */
-async function moveToImages(localPath, charName, fileNumber = 0, ext = "png") {
+async function moveToImages(localPath, charName, avatarName, fileNumber = 0, ext = "png") {
     if (typeof localPath !== "string") {
         throw new Error("moveToImages: localPath must be a string");
     }
 
+    // avatarName is character name plus a number to disambiguate multiple images, literally avatarName = charName#
+    // we need the number only
+    const charNumber = avatarName.replace(charName, "").replace(/[^0-9]/g, "");
     const safeChar = charName.replace(/[^a-z0-9_-]/gi, "_");
-    const dest = `/user/images/${safeChar}/${fileNumber}.${ext}`;
+    const dest = `/user/images/${safeChar}/${charNumber}/${fileNumber}.${ext}`;
 
     const res = await fetch("/api/plugins/st-image-localizer/move-image", {
         method: "POST",
@@ -501,9 +505,9 @@ async function localizeImages() {
             // 1) upload to /user/files/...
             const tmpPath = await downloadToLocal(remoteUrl, avatarName, urlCnt, extensionType);
 
-            // 2) move to /user/images/<charName>/N.ext via plugin
+            // 2) move to /user/images/<charName>/<avatarName - charName>/N.ext via plugin
             // 3) store mapping for replacement
-            urlMap[remoteUrl] = await moveToImages(tmpPath, avatarName, urlCnt, extensionType);
+            urlMap[remoteUrl] = await moveToImages(tmpPath, charName, avatarName, urlCnt, extensionType);
             urlCnt++;
         } catch (err) {
             console.warn("[localizeImages] Failed to convert:", remoteUrl, err);
