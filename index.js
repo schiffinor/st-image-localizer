@@ -42,11 +42,24 @@ import {SlashCommandParser} from '../../../slash-commands/SlashCommandParser.js'
 
 const EXTENSION_ID = "localizeImages";
 
-// Handy-dandy regex to match markdown and HTML image URLs
-// [](alt text)(url) markdown
-// <img alt="alt text" src="url" foo="bar" /> HTML
-const URL_REGEX =
-    /(?:!?\[(?<altTextBrk>[^\]]*?)]\s*?\(|<img(?: alt=["'](?<altTextImg1>[^"']*?))? src=["'])(https?:\/\/[^\s)"'>]+)(?:["'](?: alt=(?:["'](?<altTextImg2>[^"']*?)["'])?)?(?:(?<attr> ?[a-zA-Z0-9]+?=["'][^"']+?["'])*?)?\/?>|\s?\))/gi;
+// Image matching.
+//
+// The old single mega-regex tried to handle markdown AND <img> tags AND
+// arbitrary attribute ordering in one pattern. It had a fatal bug: the alt
+// sub-pattern in the <img> branch was missing its closing quote, so any tag
+// written as `<img alt="..." src="...">` (alt BEFORE src — extremely common,
+// and in fact the exact shape this very extension emits) never matched and was
+// silently skipped. It also choked on extra attributes like `style="..."`.
+//
+// Instead we use two small, focused patterns and never assume attribute order:
+//   - markdown: `![alt](url)` / `[alt](url)`
+//   - html:     `<img ... src="http(s)://...">` with src anywhere in the tag
+// For HTML tags the alt text is pulled out separately so order doesn't matter.
+// Only http(s) URLs are captured, so already-localized `/user/...` paths are
+// left untouched (idempotent re-runs).
+const MD_IMAGE_REGEX   = /!?\[(?<alt>[^\]]*?)\]\(\s*(?<url>https?:\/\/[^\s)"'<>]+)\s*\)/gi;
+const HTML_IMAGE_REGEX = /<img\b[^>]*?\bsrc\s*=\s*["'](?<url>https?:\/\/[^"'<>\s]+)["'][^>]*?>/gi;
+const ALT_ATTR_REGEX   = /\balt\s*=\s*["'](?<alt>[^"']*)["']/i;
 
 // which JSON fields to scan for URLs?
 const SCAN_FIELDS = [
@@ -67,47 +80,72 @@ const SCAN_FIELDS = [
  * @returns {[]|*[]} array of URLs
  */
 function extractUrls(text) {
-    if (typeof text !== "string") return [];
-    const urls = [];
-    for (const m of text.matchAll(URL_REGEX)) {
-        if (m[3]) urls.push(m[3]);
-    }
-    return urls;
+    return extractUrlsWithMetadata(text).map(m => m.url);
 }
 
 /**
  * Extract all URLs with metadata from a text block.
  *
  * @param {String} text any text block
- * @returns {Array} array of objects: { full, url, alt, isMarkdown, isHtml }
+ * @returns {Array} array of objects: { full, url, alt, attrs, isMarkdown, isHtml }
  */
 function extractUrlsWithMetadata(text) {
     if (typeof text !== "string") return [];
 
     const results = [];
 
-    for (const match of text.matchAll(URL_REGEX)) {
-        const full = match[0];
-        const url = match[3];
-        const alt =
-            match.groups?.altTextBrk ||
-            match.groups?.altTextImg1 ||
-            match.groups?.altTextImg2 ||
-            "";
-
-        const isMarkdown = full.startsWith("[");
-        const isHtml = full.toLowerCase().startsWith("<img");
-
+    // Markdown images: ![alt](url) / [alt](url)
+    for (const match of text.matchAll(MD_IMAGE_REGEX)) {
         results.push({
-            full,
-            url,
-            alt,
-            isMarkdown,
-            isHtml,
+            full: match[0],
+            url: match.groups.url,
+            alt: match.groups.alt || "",
+            attrs: "", // markdown carries no extra attributes
+            isMarkdown: true,
+            isHtml: false,
+        });
+    }
+
+    // HTML <img> tags: src can sit anywhere among the attributes, and alt is
+    // read out of the matched tag separately so its position doesn't matter.
+    // We also keep every *other* attribute (style, width, class, …) so they
+    // survive localization instead of being thrown away.
+    for (const match of text.matchAll(HTML_IMAGE_REGEX)) {
+        const altMatch = match[0].match(ALT_ATTR_REGEX);
+        results.push({
+            full: match[0],
+            url: match.groups.url,
+            alt: altMatch?.groups?.alt || "",
+            attrs: extractExtraAttrs(match[0]),
+            isMarkdown: false,
+            isHtml: true,
         });
     }
 
     return results;
+}
+
+/**
+ * Pull every attribute except src/alt out of an <img> tag, as a single
+ * normalized string (e.g. `style="..." width="10"`). Used to carry things
+ * like style/positioning through to the rewritten local tag.
+ *
+ * @param {String} tag full <img ...> tag
+ * @returns {String} space-joined extra attributes, or "" if none
+ */
+function extractExtraAttrs(tag) {
+    // Strip the leading "<img" and trailing ">" (and optional self-closing "/").
+    const inner = tag.replace(/^<img\b/i, "").replace(/\/?>\s*$/, "");
+
+    const attrs = [];
+    // attr="value" / attr='value' — attribute names may contain - and :
+    const ATTR_RE = /([a-zA-Z_:][a-zA-Z0-9_:.-]*)\s*=\s*("[^"]*"|'[^']*')/g;
+    for (const m of inner.matchAll(ATTR_RE)) {
+        const name = m[1].toLowerCase();
+        if (name === "src" || name === "alt") continue;
+        attrs.push(`${m[1]}=${m[2]}`);
+    }
+    return attrs.join(" ");
 }
 
 /**
@@ -125,7 +163,14 @@ function replaceImagesWithHtml(text, urlMap) {
         const local = urlMap[m.url];
         if (!local) continue;
 
-        const imgTag = `<img alt="${m.alt}" src="${local}">`;
+        // Reassemble the tag keeping alt + any extra attributes (style, width,
+        // class, …); only the URL becomes local. Markdown has no extras, so it
+        // just gets a clean <img alt src>.
+        const parts = ["<img"];
+        if (m.alt) parts.push(`alt="${m.alt}"`);
+        parts.push(`src="${local}"`);
+        if (m.attrs) parts.push(m.attrs);
+        const imgTag = parts.join(" ") + ">";
 
         output = output.replace(m.full, imgTag);
     }
@@ -306,7 +351,12 @@ async function moveToImages(localPath, charName, avatarName, fileNumber = 0, ext
     // we need the number only
     const charNumber = avatarName.replace(charName, "").replace(/[^0-9]/g, "");
     const safeChar = charName.replace(/[^a-z0-9_-]/gi, "_");
-    const dest = `/user/images/${safeChar}/${charNumber}/${fileNumber}.${ext}`;
+    // Build the path from segments and drop empty ones, otherwise an empty
+    // charNumber (single-avatar characters) produced a double slash, e.g.
+    // "/user/images/Daeoni//0.png".
+    const dest = "/" + ["user", "images", safeChar, charNumber, `${fileNumber}.${ext}`]
+        .filter(Boolean)
+        .join("/");
 
     const res = await fetch("/api/plugins/st-image-localizer/move-image", {
         method: "POST",
